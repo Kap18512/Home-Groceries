@@ -169,6 +169,48 @@ def test_shared_between_users_and_who_is_recorded(client):
     assert ev[0]["who"] == "Wife" and ev[1]["who"] == "Kap"
 
 
+def test_shopping_by_store(client):
+    login(client)
+    cheese = client.post("/api/shopping", json={"name": "Shredded cheese", "store": "Target"}).json()
+    paper = client.post("/api/shopping", json={"name": "Paper towels", "store": "BJ's Wholesale"}).json()
+    soda = client.post("/api/shopping", json={"name": "Soda", "store": "Publix", "note": "BOGO"}).json()
+    anywhere = client.post("/api/shopping", json={"name": "Bananas"}).json()
+    by_name = {i["name"]: i for i in client.get("/api/shopping").json()}
+    assert by_name["Shredded cheese"]["store"] == "Target"
+    assert by_name["Soda"]["note"] == "BOGO" and by_name["Bananas"]["store"] == ""
+    # same item may be on two stores' lists, but not twice on the same one
+    again = client.post("/api/shopping", json={"name": "shredded cheese", "store": "Target"}).json()
+    assert again["id"] == cheese["id"]
+    other = client.post("/api/shopping", json={"name": "Shredded cheese", "store": "Walmart"}).json()
+    assert other["id"] != cheese["id"]
+    # move to another store and change the note
+    r = client.patch(f"/api/shopping/{soda['id']}", json={"store": "Walmart", "note": ""})
+    assert r.json()["store"] == "Walmart" and r.json()["note"] == ""
+    assert client.patch(f"/api/shopping/{soda['id']}", json={"store": "Costco"}).status_code == 422
+    assert client.patch("/api/shopping/99999", json={"store": "Target"}).status_code == 404
+    assert "Target" in client.get("/api/config").json()["stores"]
+    for i in (cheese, paper, soda, anywhere, other):
+        client.delete(f"/api/shopping/{i['id']}")
+
+
+def test_database_upgrade_adds_store_columns():
+    import sqlite3
+    path = os.path.join(_tmp, "old.db")
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE shopping (id INTEGER PRIMARY KEY, name TEXT NOT NULL, added_by TEXT NOT NULL, "
+                 "created_at TEXT NOT NULL DEFAULT (datetime('now')))")
+    conn.execute("INSERT INTO shopping (name, added_by) VALUES ('Old item', 'kap')")
+    conn.commit(); conn.close()
+    old = db.DB_PATH
+    db.DB_PATH = type(old)(path)
+    try:
+        db.init()
+        row = db.connect().execute("SELECT name, store, note FROM shopping").fetchone()
+        assert (row["name"], row["store"], row["note"]) == ("Old item", "", "")
+    finally:
+        db.DB_PATH = old
+
+
 def test_shopping_list(client):
     login(client)
     a = client.post("/api/shopping", json={"name": "Sour cream"}).json()
