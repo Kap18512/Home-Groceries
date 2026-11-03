@@ -70,7 +70,7 @@ and see or change the inventory. On a home network that is usually a fair trade,
 exposing grocery lists and not anything sensitive. Keep it that way by:
 
 - never forwarding port 8000 on your router to the internet,
-- reaching it from outside the house only through Tailscale (below), and
+- reaching it from outside the house only through Tailscale (see "Setting up Tailscale" below), and
 - adding a password later if guests join your Wi-Fi: `manage.py set-password ken`.
 
 To remove a password and go back to tap-your-name: `manage.py set-password ken --no-password`.
@@ -79,24 +79,54 @@ To remove a password and go back to tap-your-name: `manage.py set-password ken -
 
 - **Live camera scanning only works over https.** Over plain `http://192.168.x.x:8000` the Scan screen
   switches to "take a photo of the barcode", which uses your phone's camera app and still works.
-  Set up Tailscale below to get https and live scanning.
+  Follow "Setting up Tailscale" below to get https and live scanning.
 - **The VM needs internet access** to look up new barcodes. Check from the VM with:
   `sudo -u groceries env GROCERIES_DB=/var/lib/groceries/groceries.db /opt/home-groceries/.venv/bin/python /opt/home-groceries/manage.py lookup 0021000614509`
   It prints the product name if the lookup works, or says what is wrong.
 - A product only needs to be looked up once. After that it comes from your own catalog.
 
-### Reaching it away from home (Tailscale)
+### Setting up Tailscale (https, live scanning, and use away from home)
 
-Install Tailscale on the VM and on both phones, then on the VM:
+Tailscale puts your VM and phones on a private network that only your own devices can join. It gives
+the app a proper `https://` address, which is what the iPhone camera needs, and it works from anywhere
+without opening anything on your router. It is free for personal use.
 
-```bash
-sudo tailscale up
-sudo tailscale serve --bg 8000        # gives you an https address on your tailnet
-```
+1. **Make an account** at [tailscale.com](https://tailscale.com) (sign in with Google, Microsoft or Apple).
+2. **Install it on the VM** and connect it:
+   ```bash
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up
+   ```
+   `tailscale up` prints a login link. Open it on your laptop or phone and approve the machine. If the
+   install script does not recognise your Ubuntu version, see tailscale.com/download/linux.
+3. **Install the Tailscale app on both phones** (App Store), sign in to the same account, and switch it on.
+4. **Turn on https once, in Tailscale's admin page.** Open
+   [login.tailscale.com/admin/dns](https://login.tailscale.com/admin/dns), make sure **MagicDNS** is
+   enabled, then under **HTTPS Certificates** click **Enable HTTPS**. Skipping this is the most common
+   reason step 5 fails.
+5. **Publish the app over https** (run on the VM):
+   ```bash
+   sudo tailscale serve --bg 8000
+   tailscale serve status        # shows your address, like https://groceries.your-tailnet.ts.net
+   ```
+   This keeps the app private to your devices. Do **not** use `tailscale funnel`, which makes it public.
+6. **On each phone**, with Tailscale switched on, open that https address in Safari. Allow the camera
+   when asked. Then **Share, Add to Home Screen** again, because an icon saved from the old
+   `http://192.168...` address still points there. Live scanning now works.
 
-Once you use the https address, set `GROCERIES_SECURE_COOKIES=1` in
-`/etc/systemd/system/groceries.service`, then `sudo systemctl daemon-reload && sudo systemctl restart groceries`.
-HTTPS is also what iPhone needs for the camera and for push notifications later.
+Good to know:
+
+- The https address only works while Tailscale is switched on on the phone, even at home. The plain
+  `http://<vm-address>:8000` address keeps working at home without it (with the photo-of-barcode
+  fallback for scanning), so you have a backup way in.
+- To get a friendlier name than the machine's hostname: `sudo tailscale set --hostname=groceries`
+  (then run `tailscale serve status` again to see the new address).
+- `GROCERIES_SECURE_COOKIES` in `/etc/systemd/system/groceries.service` is optional. Leave it at `0` and
+  sign-in works on both addresses. Set it to `1` only if you want to *stop* signing in over plain http,
+  because browsers refuse to keep a secure cookie on an http page. After changing it:
+  `sudo systemctl daemon-reload && sudo systemctl restart groceries`.
+- If `tailscale serve` says HTTPS is not enabled, repeat step 4. If the page shows a certificate error
+  right after enabling, wait a minute and reload.
 
 ### Day-to-day
 
