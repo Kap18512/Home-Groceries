@@ -18,7 +18,7 @@ const $=s=>document.querySelector(s);
 let CFG=null, USER=null, items=[], shopping=[];
 const LEVELS={full:'Full',half:'Half',low:'Almost out'};
 const locKey=l=>l==='Pantry'?'pantry':l==='Fridge'?'fridge':'freezer';
-const S={tab:'search',q:'',loc:'all',cat:'all',status:'all',sort:'soon'};
+const S={tab:'search',q:'',loc:'all',cat:'all',status:'all',sort:'soon',store:'all'};
 
 async function api(method,url,body){
   const r=await fetch(url,{method,credentials:'same-origin',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});
@@ -173,16 +173,68 @@ function renderLocs(){
     <h2 class="sec">By category</h2>
     <div class="chips" style="flex-wrap:wrap;overflow:visible">${CFG.cats.map(c=>{const n=items.filter(i=>i.cat===c).length;return n?`<button class="chip" data-act="gocat" data-v="${esc(c)}">${c} · ${n}</button>`:''}).join('')}</div>`;
 }
+const ANY='Any store';
+function shopRow(s){
+  const have=items.filter(i=>i.name.toLowerCase().includes(s.name.toLowerCase()));
+  const sub=[s.note?esc(s.note):'',have.length?'<span style="color:var(--warn);font-weight:600">You already have '+esc(have[0].name)+' ('+esc(have[0].loc)+')</span>':''].filter(Boolean).join(' · ');
+  return `<div class="row" style="grid-template-columns:minmax(0,1fr) auto"><span class="rmain"><span class="rname">${esc(s.name)}</span>
+    ${sub?`<span class="rsub">${sub}</span>`:''}
+    <span class="rtags"><button class="tag storetag" data-act="shop-edit" data-id="${s.id}" aria-label="Edit ${esc(s.name)}, store: ${esc(s.store||ANY)}">${esc(s.store||ANY)}</button></span></span>
+    <button class="chip" data-act="list-del" data-id="${s.id}">Got it</button></div>`;
+}
 function renderList(){
+  const stores=CFG.stores;
+  const count=st=>shopping.filter(x=>x.store===st).length;
+  const chip=(v,label)=>`<button class="chip" data-act="shop-filter" data-v="${esc(v)}" aria-pressed="${S.store===v}">${esc(label)}</button>`;
+  const active=stores.filter(st=>count(st)>0||S.store===st);
+  let body='';
+  if(!shopping.length){
+    body='<div class="empty"><h3>List is empty</h3><p>Add what you need and pick the store. Items you use up can be added here too.</p></div>';
+  }else if(S.store==='all'){
+    const groups=[...stores.filter(st=>count(st)),...(count('')?['']:[])];
+    body=groups.map(st=>`<h2 class="sec">${esc(st||ANY)}<span>${count(st)}</span></h2><div class="list">${shopping.filter(x=>x.store===st).map(shopRow).join('')}</div>`).join('');
+  }else{
+    const mine=shopping.filter(x=>x.store===S.store),any=shopping.filter(x=>x.store==='');
+    body=(mine.length?`<h2 class="sec">${esc(S.store)}<span>${mine.length}</span></h2><div class="list">${mine.map(shopRow).join('')}</div>`
+      :`<div class="empty"><h3>Nothing for ${esc(S.store)}</h3><p>Pick that store when you add an item.</p></div>`)
+      +(any.length?`<h2 class="sec">${ANY}<span>${any.length}</span></h2><div class="list">${any.map(shopRow).join('')}</div>`:'');
+  }
+  const addStore=S.store==='all'?'':S.store;
   $('#view').innerHTML=`<h2 class="sec" style="margin-top:6px">Shopping list<span>${plural(shopping.length,'item')}</span></h2>
-    <form id="lform" style="display:flex;gap:8px"><input id="litem" class="inp" style="margin:0" placeholder="Add an item" autocomplete="off" maxlength="120"><button class="btn primary" type="submit">Add</button></form>
-    <div class="list" style="margin-top:12px">${shopping.length?shopping.map(s=>{
-      const have=items.filter(i=>i.name.toLowerCase().includes(s.name.toLowerCase()));
-      return `<div class="row" style="grid-template-columns:minmax(0,1fr) auto"><span class="rmain"><span class="rname">${esc(s.name)}</span>
-        <span class="rsub">${have.length?'<span style="color:var(--warn);font-weight:600">You already have '+esc(have[0].name)+' ('+esc(have[0].loc)+')</span>':'None on hand'}</span></span>
-        <button class="chip" data-act="list-del" data-id="${s.id}">Got it</button></div>`}).join(''):'<div class="empty"><h3>List is empty</h3><p>Items you use up can be added here with one tap.</p></div>'}</div>`;
+    <form id="lform" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px">
+      <input id="litem" class="inp" style="margin:0" placeholder="Add an item" autocomplete="off" maxlength="120" aria-label="Item to add">
+      <button class="btn primary" type="submit">Add</button>
+      <select id="lstore" class="inp" style="margin:0;grid-column:1/-1" aria-label="Store">
+        <option value="">${ANY}</option>${stores.map(st=>`<option ${st===addStore?'selected':''}>${esc(st)}</option>`).join('')}</select>
+    </form>
+    <div class="chips" style="margin-top:6px">${chip('all','All stores · '+shopping.length)}${active.map(st=>chip(st,st+' · '+count(st))).join('')}</div>
+    <div style="margin-top:6px">${body}</div>`;
   $('#lform').onsubmit=async e=>{e.preventDefault();const v=$('#litem').value.trim();if(!v)return;
-    try{await api('POST','/api/shopping',{name:v});await loadShopping();renderList();badge()}catch(x){fail(x)}};
+    try{await api('POST','/api/shopping',{name:v,store:$('#lstore').value});await loadShopping();renderList();badge()}catch(x){fail(x)}};
+}
+let SE=null;
+function shopEdit(id){
+  const x=shopping.find(i=>i.id===id);if(!x)return;
+  SE={id,name:x.name,store:x.store,note:x.note};
+  const stores=['',...CFG.stores];
+  sheet(`<h3 style="font:700 21px var(--display);margin:0">Shopping item</h3>
+    <label class="f">Name<input id="sh-name" maxlength="120" autocomplete="off" value="${esc(SE.name)}"></label>
+    <div class="chiplabel">Buy at</div>
+    <div class="locpick">${stores.map(st=>`<button class="chip" data-act="shop-store" data-v="${esc(st)}" aria-pressed="${SE.store===st}">${esc(st||ANY)}</button>`).join('')}</div>
+    <label class="f">Note (optional)<input id="sh-note" maxlength="80" autocomplete="off" placeholder="e.g. BOGO this week" value="${esc(SE.note)}"></label>
+    <p class="err" id="sherr" role="alert" style="color:var(--bad);margin:10px 2px 0;min-height:18px"></p>
+    <div class="btns" style="margin-top:8px"><button class="btn" data-act="close">Cancel</button><button class="btn primary" data-act="shop-save">Save</button></div>
+    <button class="btn block" data-act="list-del-sheet" style="margin-top:8px">Got it, remove from list</button>`);
+}
+async function removeShop(id){
+  const x=shopping.find(i=>i.id===id);if(!x)return;
+  try{
+    await api('DELETE','/api/shopping/'+id);await loadShopping();
+    if(S.tab==='list')renderList();badge();
+    toast('Removed '+x.name,'Undo',async()=>{
+      try{await api('POST','/api/shopping',{name:x.name,store:x.store,note:x.note});await loadShopping();if(S.tab==='list')renderList();badge()}catch(e){fail(e)}
+    });
+  }catch(e){fail(e)}
 }
 function badge(){const b=$('#listBadge');b.hidden=!shopping.length;b.textContent=shopping.length}
 function render(){
@@ -192,7 +244,7 @@ function render(){
 
 /* ---------- sheet ---------- */
 function sheet(html){$('#sheetbody').innerHTML=html;$('#sheet').hidden=false;$('.panel').scrollTop=0}
-function closeSheet(){$('#sheet').hidden=true;$('#sheetbody').innerHTML='';M=null;render()}
+function closeSheet(){$('#sheet').hidden=true;$('#sheetbody').innerHTML='';M=null;SE=null;render()}
 const sheetOpen=()=>!$('#sheet').hidden;
 
 function openItem(id){
@@ -355,7 +407,16 @@ const H={
   used:b=>removeItem(byId(b),'used'),
   toss:b=>removeItem(byId(b),'tossed'),
   buyagain:async b=>{const it=items.find(x=>x.id===byId(b));await addShop(it.name)()},
-  'list-del':async b=>{try{await api('DELETE','/api/shopping/'+byId(b));await loadShopping();renderList();badge()}catch(e){fail(e)}},
+  'list-del':b=>removeShop(byId(b)),
+  'list-del-sheet':async()=>{const id=SE.id;closeSheet();await removeShop(id)},
+  'shop-filter':b=>{S.store=b.dataset.v;renderList()},
+  'shop-edit':b=>shopEdit(byId(b)),
+  'shop-store':b=>{SE.store=b.dataset.v;document.querySelectorAll('[data-act=shop-store]').forEach(x=>x.setAttribute('aria-pressed',x===b))},
+  'shop-save':async()=>{
+    if(!SE.name.trim()){$('#sherr').textContent='Give the item a name.';return}
+    try{await api('PATCH','/api/shopping/'+SE.id,{name:SE.name.trim(),store:SE.store,note:SE.note.trim()});await loadShopping();closeSheet()}
+    catch(e){$('#sherr').textContent=e.message}
+  },
   'list-add-q':async()=>{const v=S.q.trim();if(v)await addShop(v)()},
   add:addMenu,
   manual:()=>{newM();manual()},
@@ -375,8 +436,8 @@ const H={
   },
   'show-pw':()=>{$('#quickwrap').hidden=true;$('#loginForm').hidden=false;$('#lu').focus()}
 };
-function addShop(name){return async()=>{
-  try{await api('POST','/api/shopping',{name});await loadShopping();badge();toast('“'+name+'” is on the shopping list');if(S.tab==='list')renderList()}catch(e){fail(e)}
+function addShop(name,store){return async()=>{
+  try{await api('POST','/api/shopping',{name,store:store||''});await loadShopping();badge();toast('“'+name+'” is on the shopping list');if(S.tab==='list')renderList()}catch(e){fail(e)}
 }}
 document.addEventListener('click',e=>{const b=e.target.closest('[data-act]');if(b&&H[b.dataset.act])H[b.dataset.act](b,e)});
 function onInput(e){
@@ -385,6 +446,7 @@ function onInput(e){
   // redrawing the results on blur would swallow the tap on a button inside them.
   if(id==='q'){if(e.type==='input'){S.q=t.value;renderResults()}return}
   if(id==='sort'){S.sort=t.value;renderResults();return}
+  if(SE){if(id==='sh-name')SE.name=t.value;else if(id==='sh-note')SE.note=t.value;return}
   if(!M)return;
   if(id==='f-name')M.name=t.value;
   else if(id==='f-brand')M.brand=t.value;

@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import db
-from .rules import CATS, LEVELS, LOCS, RULES, THAW_DAYS, is_freezer, loc_key
+from .rules import CATS, LEVELS, LOCS, RULES, STORES, THAW_DAYS, is_freezer, loc_key
 
 SESSION_DAYS = 30
 COOKIE = "hg_session"
@@ -92,6 +92,7 @@ def get_item(conn, item_id: int, include_removed: bool = False) -> sqlite3.Row:
 Cat = Literal[CATS]  # type: ignore[valid-type]
 Loc = Literal[LOCS]  # type: ignore[valid-type]
 Level = Literal[LEVELS]  # type: ignore[valid-type]
+Store = Literal[STORES + ("",)]  # type: ignore[valid-type]  # "" means any store
 
 
 class LoginIn(BaseModel):
@@ -121,6 +122,14 @@ class ActionIn(BaseModel):
 
 class ShoppingIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
+    store: Store = ""
+    note: str = Field(default="", max_length=80)
+
+
+class ShoppingPatch(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    store: Optional[Store] = None
+    note: Optional[str] = Field(default=None, max_length=80)
 
 
 # -------------------------------------------------------------------- auth
@@ -177,7 +186,7 @@ def health():
 
 @app.get("/api/config")
 def config(user=Depends(current_user)):
-    return {"locs": LOCS, "cats": CATS, "levels": LEVELS, "rules": RULES}
+    return {"locs": LOCS, "cats": CATS, "levels": LEVELS, "stores": STORES, "rules": RULES}
 
 
 # ------------------------------------------------------------------- items
@@ -326,17 +335,32 @@ def recent(conn=Depends(get_conn), user=Depends(current_user)):
 
 @app.get("/api/shopping")
 def shopping_list(conn=Depends(get_conn), user=Depends(current_user)):
-    return [dict(r) for r in conn.execute("SELECT id, name FROM shopping ORDER BY id")]
+    return [dict(r) for r in conn.execute("SELECT id, name, store, note FROM shopping ORDER BY id")]
 
 
 @app.post("/api/shopping", status_code=201)
 def shopping_add(body: ShoppingIn, conn=Depends(get_conn), user=Depends(current_user)):
     name = body.name.strip()
-    dup = conn.execute("SELECT id, name FROM shopping WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
+    # The same thing can be on two stores' lists, but not twice on the same one.
+    dup = conn.execute("SELECT id, name, store, note FROM shopping WHERE name = ? COLLATE NOCASE AND store = ?",
+                       (name, body.store)).fetchone()
     if dup:
         return dict(dup)
-    cur = conn.execute("INSERT INTO shopping (name, added_by) VALUES (?,?)", (name, user["username"]))
-    return {"id": cur.lastrowid, "name": name}
+    cur = conn.execute("INSERT INTO shopping (name, store, note, added_by) VALUES (?,?,?,?)",
+                       (name, body.store, body.note.strip(), user["username"]))
+    return {"id": cur.lastrowid, "name": name, "store": body.store, "note": body.note.strip()}
+
+
+@app.patch("/api/shopping/{sid}")
+def shopping_edit(sid: int, body: ShoppingPatch, conn=Depends(get_conn), user=Depends(current_user)):
+    row = conn.execute("SELECT * FROM shopping WHERE id = ?", (sid,)).fetchone()
+    if not row:
+        raise HTTPException(404, "That item is no longer on the list")
+    name = body.name.strip() if body.name is not None else row["name"]
+    store = body.store if body.store is not None else row["store"]
+    note = body.note.strip() if body.note is not None else row["note"]
+    conn.execute("UPDATE shopping SET name=?, store=?, note=? WHERE id=?", (name, store, note, sid))
+    return {"id": sid, "name": name, "store": store, "note": note}
 
 
 @app.delete("/api/shopping/{sid}", status_code=204)

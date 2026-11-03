@@ -13,7 +13,10 @@ consumption and waste trends are possible later.
 - Count or level quantities (count with a −1 button, or Full / Half / Almost out)
 - Purchase, package and opened dates. Opening an item starts a shorter "use by" clock
 - Moving to a freezer resets the date to the frozen shelf life; moving back starts a thaw clock
-- Used up and Tossed with Undo, edit details, "Buy again", and a shared shopping list
+- Used up and Tossed with Undo, edit details, "Buy again"
+- A shared shopping list tagged by store (Publix, Target, Walmart, BJ's, Whole Foods, Trader Joe's, or any
+  store), with an optional note such as "BOGO". Pick a store to see only what to buy there. Stores are
+  listed in `app/rules.py`
 - Expiring view and a Locations view
 - Two logins (a password, or just tap your name), installable to the iPhone home screen
 - Full audit history per item (shown in the item screen)

@@ -60,7 +60,9 @@ CREATE TABLE IF NOT EXISTS shopping (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
   added_by TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  store TEXT NOT NULL DEFAULT '',   -- '' means any store
+  note TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -80,6 +82,12 @@ def init() -> None:
     conn = connect()
     try:
         conn.executescript(SCHEMA)
+        # Upgrade databases created before shopping items had a store and a note.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(shopping)")}
+        if "store" not in cols:
+            conn.execute("ALTER TABLE shopping ADD COLUMN store TEXT NOT NULL DEFAULT ''")
+        if "note" not in cols:
+            conn.execute("ALTER TABLE shopping ADD COLUMN note TEXT NOT NULL DEFAULT ''")
         conn.commit()
     finally:
         conn.close()
