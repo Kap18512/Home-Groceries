@@ -57,7 +57,11 @@ Data lives in `data/groceries.db` (SQLite). Set `GROCERIES_DB` to put it somewhe
    ```
    It installs Python, creates a service user, installs the app to `/opt/home-groceries`, keeps the
    database in `/var/lib/groceries`, starts it as a service on port 8000, and schedules a nightly backup.
-4. **Create the two logins** (the script prints the exact commands). With `--no-password`, the sign-in
+4. **Create the two logins** with the `groceries-admin` command the script installed:
+   ```bash
+   groceries-admin add-user ken "Ken" --no-password
+   groceries-admin add-user lynette "Lynette" --no-password
+   ``` With `--no-password`, the sign-in
    screen shows a "Who is this?" button for each of you. See "Signing in without a password" below.
 5. **Open `http://<vm-address>:8000`** from a phone on the same Wi-Fi.
 6. **Install it as an app:** in Safari, Share, then Add to Home Screen.
@@ -81,7 +85,7 @@ To remove a password and go back to tap-your-name: `manage.py set-password ken -
   switches to "take a photo of the barcode", which uses your phone's camera app and still works.
   Follow "Setting up Tailscale" below to get https and live scanning.
 - **The VM needs internet access** to look up new barcodes. Check from the VM with:
-  `sudo -u groceries env GROCERIES_DB=/var/lib/groceries/groceries.db /opt/home-groceries/.venv/bin/python /opt/home-groceries/manage.py lookup 0021000614509`
+  `groceries-admin lookup 0021000614509`
   It prints the product name if the lookup works, or says what is wrong.
 - A product only needs to be looked up once. After that it comes from your own catalog.
 
@@ -128,6 +132,12 @@ Good to know:
 - If `tailscale serve` says HTTPS is not enabled, repeat step 4. If the page shows a certificate error
   right after enabling, wait a minute and reload.
 
+### Admin commands
+
+`groceries-admin` runs the admin commands against the live database. It asks for your sudo password when
+needed. Run `groceries-admin --help` for the list: `add-user`, `set-password`, `list-users`, `backup`,
+`lookup`, `seed-demo`.
+
 ### Day-to-day
 
 | Task | Command |
@@ -135,8 +145,8 @@ Good to know:
 | See logs | `journalctl -u groceries -f` |
 | Restart | `sudo systemctl restart groceries` |
 | Update to the latest code | `sudo ./deploy/update.sh` |
-| Change a password | `sudo -u groceries env GROCERIES_DB=/var/lib/groceries/groceries.db /opt/home-groceries/.venv/bin/python /opt/home-groceries/manage.py set-password ken` |
-| Back up now | `sudo -u groceries env GROCERIES_DB=/var/lib/groceries/groceries.db /opt/home-groceries/.venv/bin/python /opt/home-groceries/manage.py backup /var/backups/groceries` |
+| Change a password | `groceries-admin set-password ken` |
+| Back up now | `groceries-admin backup /var/backups/groceries` |
 
 Backups land in `/var/backups/groceries` (newest 30 kept). Copy that folder to another machine now
 and then, since a backup on the same VM does not survive the VM being lost. To restore, stop the

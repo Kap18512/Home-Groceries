@@ -1,0 +1,18 @@
+#!/bin/sh
+# groceries-admin: run the manage.py admin commands against the live database as the service user.
+#
+#   groceries-admin add-user ken "Ken" --no-password
+#   groceries-admin list-users
+#   groceries-admin set-password ken
+#   groceries-admin backup /var/backups/groceries
+#   groceries-admin lookup 0021000614509
+#   groceries-admin --help
+#
+# Installed to /usr/local/bin by setup.sh and update.sh.
+APP="${GROCERIES_APP:-/opt/home-groceries}"
+DB="${GROCERIES_DB:-/var/lib/groceries/groceries.db}"
+
+if [ "$(id -un)" = "groceries" ]; then
+  exec env GROCERIES_DB="$DB" "$APP/.venv/bin/python" "$APP/manage.py" "$@"
+fi
+exec sudo -u groceries env GROCERIES_DB="$DB" "$APP/.venv/bin/python" "$APP/manage.py" "$@"
