@@ -191,3 +191,19 @@ def test_static_app_served(client):
     assert "Home Groceries" in client.get("/").text
     assert client.get("/app.js").status_code == 200
     assert client.get("/manifest.webmanifest").status_code == 200
+
+
+def test_no_password_users_sign_in_by_name(client):
+    conn = db.connect()
+    conn.execute("INSERT INTO users (username, display, pw_hash) VALUES (?,?,?)", ("ken", "Ken", ""))
+    conn.commit()
+    conn.close()
+    client.cookies.clear()
+    names = client.get("/api/login-users").json()
+    assert names == [{"username": "ken", "display": "Ken"}]  # users with passwords are not listed
+    assert client.post("/api/login", json={"username": "ken"}).status_code == 200
+    assert client.get("/api/items").status_code == 200
+    # A user who has a password can never sign in with an empty one.
+    client.cookies.clear()
+    assert client.post("/api/login", json={"username": "kap", "password": ""}).status_code == 401
+    assert client.post("/api/login", json={"username": "nobody"}).status_code == 401

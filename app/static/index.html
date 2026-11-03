@@ -227,6 +227,13 @@ body{padding-block:0 110px}
 <div class="toast" id="toast" hidden></div>
 
 <div class="login" id="login" hidden>
+  <div id="quickwrap" hidden style="width:100%;max-width:360px">
+    <h1 style="font:700 30px/1.1 var(--display);margin:0 0 6px">Home Groceries</h1>
+    <p style="color:var(--muted);margin:0 0 18px">Who is this?</p>
+    <div id="quick" style="display:flex;flex-direction:column;gap:10px"></div>
+    <p class="err" id="qerr" role="alert" style="color:var(--bad);min-height:20px;margin:10px 2px 0;font-size:14px"></p>
+    <button class="chip" data-act="show-pw" style="margin-top:6px">Sign in with a password instead</button>
+  </div>
   <form id="loginForm">
     <h1>Home Groceries</h1><p>Sign in to see what is at home.</p>
     <label class="f">Username<input id="lu" autocomplete="username" autocapitalize="none" autocorrect="off" required></label>

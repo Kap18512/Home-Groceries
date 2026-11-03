@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Admin commands. Run from the project folder with the virtualenv active.
 
-  python manage.py add-user kap "Kap"          # prompts for a password
-  python manage.py set-password kap            # change a password
+  python manage.py add-user ken "Ken"          # prompts for a password
+  python manage.py add-user ken "Ken" --no-password   # signs in by tapping the name
+  python manage.py set-password ken            # change a password (add --no-password to remove it)
   python manage.py list-users
   python manage.py backup /var/backups/groceries   # consistent copy of the database
   python manage.py seed-demo                   # sample items, only into an empty inventory
@@ -19,6 +20,8 @@ from app.rules import RULES
 
 
 def read_password(args) -> str:
+    if getattr(args, "no_password", False):
+        return ""
     if args.password:
         return args.password
     pw = getpass.getpass("Password: ")
@@ -35,7 +38,7 @@ def cmd_add_user(args):
     pw = read_password(args)
     try:
         conn.execute("INSERT INTO users (username, display, pw_hash) VALUES (?,?,?)",
-                     (args.username, args.display or args.username, db.hash_password(pw)))
+                     (args.username, args.display or args.username, db.hash_password(pw) if pw else ""))
     except sqlite3.IntegrityError:
         sys.exit(f"User {args.username!r} already exists. Use set-password to change it.")
     conn.commit()
@@ -46,18 +49,18 @@ def cmd_set_password(args):
     db.init()
     conn = db.connect()
     pw = read_password(args)
-    cur = conn.execute("UPDATE users SET pw_hash=? WHERE username=?", (db.hash_password(pw), args.username))
+    cur = conn.execute("UPDATE users SET pw_hash=? WHERE username=?", (db.hash_password(pw) if pw else "", args.username))
     if not cur.rowcount:
         sys.exit(f"No user named {args.username!r}.")
     conn.execute("DELETE FROM sessions WHERE user_id=(SELECT id FROM users WHERE username=?)", (args.username,))
     conn.commit()
-    print("Password changed. Existing sign-ins for that user were ended.")
+    print("Password removed." if not pw else "Password changed.", "Existing sign-ins for that user were ended.")
 
 
 def cmd_list_users(args):
     db.init()
-    for r in db.connect().execute("SELECT username, display, created_at FROM users ORDER BY id"):
-        print(f"{r['username']:<16} {r['display']:<20} since {r['created_at']}")
+    for r in db.connect().execute("SELECT username, display, created_at, pw_hash = '' AS nopw FROM users ORDER BY id"):
+        print(f"{r['username']:<16} {r['display']:<20} {'no password' if r['nopw'] else 'password'}  since {r['created_at']}")
 
 
 def cmd_backup(args):
@@ -117,8 +120,8 @@ def cmd_seed_demo(args):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
-    a = sub.add_parser("add-user"); a.add_argument("username"); a.add_argument("display", nargs="?"); a.add_argument("--password"); a.set_defaults(fn=cmd_add_user)
-    s = sub.add_parser("set-password"); s.add_argument("username"); s.add_argument("--password"); s.set_defaults(fn=cmd_set_password)
+    a = sub.add_parser("add-user"); a.add_argument("username"); a.add_argument("display", nargs="?"); a.add_argument("--password"); a.add_argument("--no-password", action="store_true"); a.set_defaults(fn=cmd_add_user)
+    s = sub.add_parser("set-password"); s.add_argument("username"); s.add_argument("--password"); s.add_argument("--no-password", action="store_true"); s.set_defaults(fn=cmd_set_password)
     sub.add_parser("list-users").set_defaults(fn=cmd_list_users)
     b = sub.add_parser("backup"); b.add_argument("folder"); b.add_argument("--keep", type=int, default=30); b.set_defaults(fn=cmd_backup)
     sub.add_parser("seed-demo").set_defaults(fn=cmd_seed_demo)

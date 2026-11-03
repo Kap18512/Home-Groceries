@@ -15,7 +15,7 @@ consumption and waste trends are possible later.
 - Moving to a freezer resets the date to the frozen shelf life; moving back starts a thaw clock
 - Used up and Tossed with Undo, edit details, "Buy again", and a shared shopping list
 - Expiring view and a Locations view
-- Two logins, installable to the iPhone home screen
+- Two logins (a password, or just tap your name), installable to the iPhone home screen
 - Full audit history per item (shown in the item screen)
 
 Planned next: barcode and photo capture, receipt scanning, daily expiry alerts, leftovers and
@@ -26,8 +26,9 @@ recipe ideas.
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python manage.py add-user kap "Kap"          # asks for a password
-python manage.py add-user wife "Wife"
+python manage.py add-user ken "Ken" --no-password       # tap your name to sign in
+python manage.py add-user lynette "Lynette" --no-password
+# or leave off --no-password to be asked for a password
 python manage.py seed-demo                    # optional sample items
 uvicorn app.main:app --reload                 # http://127.0.0.1:8000
 ```
@@ -48,9 +49,23 @@ Data lives in `data/groceries.db` (SQLite). Set `GROCERIES_DB` to put it somewhe
    ```
    It installs Python, creates a service user, installs the app to `/opt/home-groceries`, keeps the
    database in `/var/lib/groceries`, starts it as a service on port 8000, and schedules a nightly backup.
-4. **Create the two logins** (the script prints the exact commands).
+4. **Create the two logins** (the script prints the exact commands). With `--no-password`, the sign-in
+   screen shows a "Who is this?" button for each of you. See "Signing in without a password" below.
 5. **Open `http://<vm-address>:8000`** from a phone on the same Wi-Fi.
 6. **Install it as an app:** in Safari, Share, then Add to Home Screen.
+
+### Signing in without a password
+
+Users created with `--no-password` sign in by tapping their name, and stay signed in for 30 days per
+device. That is convenient, but it means **anyone who can reach the app can open it as either of you**
+and see or change the inventory. On a home network that is usually a fair trade, since you would be
+exposing grocery lists and not anything sensitive. Keep it that way by:
+
+- never forwarding port 8000 on your router to the internet,
+- reaching it from outside the house only through Tailscale (below), and
+- adding a password later if guests join your Wi-Fi: `manage.py set-password ken`.
+
+To remove a password and go back to tap-your-name: `manage.py set-password ken --no-password`.
 
 ### Reaching it away from home (Tailscale)
 
@@ -72,7 +87,7 @@ HTTPS is also what iPhone needs for the camera and for push notifications later.
 | See logs | `journalctl -u groceries -f` |
 | Restart | `sudo systemctl restart groceries` |
 | Update to the latest code | `sudo ./deploy/update.sh` |
-| Change a password | `sudo -u groceries env GROCERIES_DB=/var/lib/groceries/groceries.db /opt/home-groceries/.venv/bin/python /opt/home-groceries/manage.py set-password kap` |
+| Change a password | `sudo -u groceries env GROCERIES_DB=/var/lib/groceries/groceries.db /opt/home-groceries/.venv/bin/python /opt/home-groceries/manage.py set-password ken` |
 | Back up now | `sudo -u groceries env GROCERIES_DB=/var/lib/groceries/groceries.db /opt/home-groceries/.venv/bin/python /opt/home-groceries/manage.py backup /var/backups/groceries` |
 
 Backups land in `/var/backups/groceries` (newest 30 kept). Copy that folder to another machine now

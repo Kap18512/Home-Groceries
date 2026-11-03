@@ -308,7 +308,14 @@ async function saveManual(){
 }
 
 /* ---------- login ---------- */
-function showLogin(){$('#login').hidden=false;$('#who').innerHTML='';setTimeout(()=>$('#lu').focus(),50)}
+async function showLogin(){
+  $('#login').hidden=false;$('#who').innerHTML='';$('#qerr').textContent='';
+  let names=[];
+  try{const r=await fetch('/api/login-users');if(r.ok)names=await r.json()}catch(e){}
+  $('#quick').innerHTML=names.map(u=>`<button class="btn primary block" data-act="quick-login" data-u="${esc(u.username)}">${esc(u.display)}</button>`).join('');
+  $('#quickwrap').hidden=!names.length;$('#loginForm').hidden=names.length>0;
+  if(!names.length)setTimeout(()=>$('#lu').focus(),50);
+}
 function showWho(){$('#who').innerHTML=`<span>${esc(USER.display)}</span><button data-act="logout">Sign out</button>`}
 async function boot(){
   try{
@@ -361,7 +368,12 @@ const H={
   'm-level':b=>{M.level=b.dataset.v;$('#qtyblock').innerHTML=qtyBlock()},
   'save-manual':saveManual,
   logout:async()=>{try{await api('POST','/api/logout')}catch(e){}items=[];shopping=[];$('#view').innerHTML='';showLogin()},
-  retry:boot
+  retry:boot,
+  'quick-login':async b=>{
+    try{await api('POST','/api/login',{username:b.dataset.u,password:''});boot()}
+    catch(e){$('#qerr').textContent=e.message}
+  },
+  'show-pw':()=>{$('#quickwrap').hidden=true;$('#loginForm').hidden=false;$('#lu').focus()}
 };
 function addShop(name){return async()=>{
   try{await api('POST','/api/shopping',{name});await loadShopping();badge();toast('“'+name+'” is on the shopping list');if(S.tab==='list')renderList()}catch(e){fail(e)}

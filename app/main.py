@@ -96,7 +96,7 @@ Level = Literal[LEVELS]  # type: ignore[valid-type]
 
 class LoginIn(BaseModel):
     username: str = Field(min_length=1, max_length=60)
-    password: str = Field(min_length=1, max_length=200)
+    password: str = Field(default="", max_length=200)
 
 
 class ItemIn(BaseModel):
@@ -130,7 +130,9 @@ def login(body: LoginIn, request: Request, response: Response, conn: sqlite3.Con
     key = (request.client.host if request.client else "?", body.username.lower())
     _check_lock(key)
     user = conn.execute("SELECT * FROM users WHERE username = ?", (body.username,)).fetchone()
-    if not user or not db.verify_password(body.password, user["pw_hash"]):
+    # A user created with --no-password has an empty hash and signs in by name alone.
+    ok = bool(user) and (user["pw_hash"] == "" or db.verify_password(body.password, user["pw_hash"]))
+    if not ok:
         _fails.setdefault(key, []).append(time.time())
         raise HTTPException(401, "That username and password do not match.")
     _fails.pop(key, None)
@@ -146,6 +148,13 @@ def login(body: LoginIn, request: Request, response: Response, conn: sqlite3.Con
         secure=SECURE_COOKIES, path="/",
     )
     return {"username": user["username"], "display": user["display"]}
+
+
+@app.get("/api/login-users")
+def login_users(conn: sqlite3.Connection = Depends(get_conn)):
+    """Names of users who sign in without a password, for the tap-your-name screen."""
+    rows = conn.execute("SELECT username, display FROM users WHERE pw_hash = '' ORDER BY id").fetchall()
+    return [dict(r) for r in rows]
 
 
 @app.post("/api/logout", status_code=204)

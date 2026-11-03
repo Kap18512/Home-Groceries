@@ -38,7 +38,8 @@ systemctl enable --now groceries
 
 echo
 echo "Done. The app is listening on port 8000."
-echo "Next, create the two logins (you will be asked for a password for each):"
-echo "  sudo -u groceries env GROCERIES_DB=$DATA/groceries.db $APP/.venv/bin/python $APP/manage.py add-user kap \"Kap\""
-echo "  sudo -u groceries env GROCERIES_DB=$DATA/groceries.db $APP/.venv/bin/python $APP/manage.py add-user wife \"Wife\""
+echo "Next, create the two logins. With --no-password you just tap your name to sign in;"
+echo "leave that flag off to be asked for a password instead:"
+echo "  sudo -u groceries env GROCERIES_DB=$DATA/groceries.db $APP/.venv/bin/python $APP/manage.py add-user ken \"Ken\" --no-password"
+echo "  sudo -u groceries env GROCERIES_DB=$DATA/groceries.db $APP/.venv/bin/python $APP/manage.py add-user lynette \"Lynette\" --no-password"
 echo "Then open http://$(hostname -I | awk '{print $1}'):8000 from a phone on the same network."
