@@ -28,6 +28,7 @@ chown -R groceries:groceries "$APP" "$DATA" "$BACKUPS"
 
 echo "==> Installing the service and the nightly backup"
 install -m 644 "$APP/deploy/groceries.service" /etc/systemd/system/groceries.service
+install -m 755 "$APP/deploy/groceries-admin" /usr/local/bin/groceries-admin
 cat > /etc/cron.d/groceries-backup <<CRON
 # Nightly copy of the database, newest 30 kept.
 15 3 * * * groceries cd $APP && GROCERIES_DB=$DATA/groceries.db $APP/.venv/bin/python manage.py backup $BACKUPS --keep 30
@@ -40,6 +41,6 @@ echo
 echo "Done. The app is listening on port 8000."
 echo "Next, create the two logins. With --no-password you just tap your name to sign in;"
 echo "leave that flag off to be asked for a password instead:"
-echo "  sudo -u groceries env GROCERIES_DB=$DATA/groceries.db $APP/.venv/bin/python $APP/manage.py add-user ken \"Ken\" --no-password"
-echo "  sudo -u groceries env GROCERIES_DB=$DATA/groceries.db $APP/.venv/bin/python $APP/manage.py add-user lynette \"Lynette\" --no-password"
+echo "  groceries-admin add-user ken \"Ken\" --no-password"
+echo "  groceries-admin add-user lynette \"Lynette\" --no-password"
 echo "Then open http://$(hostname -I | awk '{print $1}'):8000 from a phone on the same network."
