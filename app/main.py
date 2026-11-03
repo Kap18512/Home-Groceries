@@ -10,7 +10,10 @@ from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db
+import base64
+import binascii
+
+from . import db, off
 from .rules import CATS, LEVELS, LOCS, RULES, STORES, THAW_DAYS, is_freezer, loc_key
 
 SESSION_DAYS = 30
@@ -74,14 +77,19 @@ def fmt(d: date) -> str:
     return d.strftime("%b %-d")
 
 
+# Items joined to their product so each row carries the photo version (NULL when there is no photo).
+ITEM_SELECT = ("SELECT i.*, p.photo_v AS photo_v FROM items i "
+               "LEFT JOIN products p ON p.id = i.product_id")
+
+
 def item_out(r: sqlite3.Row) -> dict:
     keys = ("id", "name", "brand", "cat", "loc", "mode", "qty", "level", "pkg", "bought",
-            "exp", "opened", "ol", "type", "col", "created_by")
+            "exp", "opened", "ol", "type", "col", "created_by", "product_id", "photo_v")
     return {k: r[k] for k in keys}
 
 
 def get_item(conn, item_id: int, include_removed: bool = False) -> sqlite3.Row:
-    row = conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+    row = conn.execute(ITEM_SELECT + " WHERE i.id = ?", (item_id,)).fetchone()
     if not row or (row["removed_at"] and not include_removed):
         raise HTTPException(404, "Item not found")
     return row
@@ -112,6 +120,12 @@ class ItemIn(BaseModel):
     bought: date
     exp: Optional[date] = None
     opened: Optional[date] = None
+    product_id: Optional[int] = None
+    barcode: Optional[str] = Field(default=None, max_length=20)
+
+
+class PhotoIn(BaseModel):
+    image: str = Field(max_length=600_000)  # a data: URL holding a small JPEG
 
 
 class ActionIn(BaseModel):
@@ -193,7 +207,7 @@ def config(user=Depends(current_user)):
 
 @app.get("/api/items")
 def list_items(conn=Depends(get_conn), user=Depends(current_user)):
-    rows = conn.execute("SELECT * FROM items WHERE removed_at IS NULL ORDER BY id").fetchall()
+    rows = conn.execute(ITEM_SELECT + " WHERE i.removed_at IS NULL ORDER BY i.id").fetchall()
     return [item_out(r) for r in rows]
 
 
@@ -204,15 +218,16 @@ def create_item(body: ItemIn, conn=Depends(get_conn), user=Depends(current_user)
     if exp is None:
         days = rule[loc_key(body.loc)]
         exp = body.bought + timedelta(days=days)
+    product_id = resolve_product(conn, body)
     cur = conn.execute(
         """INSERT INTO items (name, brand, cat, loc, mode, qty, level, pkg, bought, exp, opened, ol,
-                              type, col, created_by)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                              type, col, created_by, product_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (body.name.strip(), body.brand.strip(), body.cat, body.loc, body.mode,
          body.qty if body.mode == "count" else 1, body.level if body.mode == "level" else "full",
          body.pkg.strip(), body.bought.isoformat(), exp.isoformat(),
          body.opened.isoformat() if body.opened else None, rule["open"],
-         rule["type"], rule["col"], user["username"]),
+         rule["type"], rule["col"], user["username"], product_id),
     )
     item = get_item(conn, cur.lastrowid)
     log_event(conn, item, user, "Added", body.loc + (f" · ×{body.qty}" if body.mode == "count" else ""))
@@ -321,11 +336,124 @@ def item_events(item_id: int, conn=Depends(get_conn), user=Depends(current_user)
     return [dict(r) for r in rows]
 
 
+# ---------------------------------------------------------------- products
+
+def link_existing_items(conn, product_id: int, name: str, brand: str) -> None:
+    """Items you already had of the same thing (same name and brand) share the product, and its photo."""
+    conn.execute("""UPDATE items SET product_id = ? WHERE product_id IS NULL AND removed_at IS NULL
+                    AND name = ? COLLATE NOCASE AND brand = ? COLLATE NOCASE""", (product_id, name, brand))
+
+
+def resolve_product(conn, body: "ItemIn") -> Optional[int]:
+    """Link a new item to what it is. Reuse a known product (by id, barcode, or same name and brand),
+    or create one when a barcode is given. Corrections made while adding are remembered on the product."""
+    name, brand, pkg = body.name.strip(), body.brand.strip(), body.pkg.strip()
+    prod = None
+    if body.product_id:
+        prod = conn.execute("SELECT * FROM products WHERE id = ?", (body.product_id,)).fetchone()
+    code = off.normalize(body.barcode) if body.barcode else None
+    if not prod and code:
+        prod = conn.execute("SELECT * FROM products WHERE barcode = ?", (code,)).fetchone()
+        if not prod:
+            cur = conn.execute("INSERT INTO products (barcode, name, brand, cat, pkg, source) VALUES (?,?,?,?,?,'user')",
+                               (code, name, brand, body.cat, pkg))
+            link_existing_items(conn, cur.lastrowid, name, brand)
+            return cur.lastrowid
+    if not prod:
+        prod = conn.execute(
+            """SELECT * FROM products WHERE name = ? COLLATE NOCASE AND brand = ? COLLATE NOCASE
+               ORDER BY photo_v IS NULL, id LIMIT 1""", (name, brand)).fetchone()
+    if not prod:
+        return None
+    if prod["barcode"] and (prod["name"], prod["brand"], prod["cat"], prod["pkg"]) != (name, brand, body.cat, pkg):
+        conn.execute("UPDATE products SET name=?, brand=?, cat=?, pkg=? WHERE id=?", (name, brand, body.cat, pkg, prod["id"]))
+    link_existing_items(conn, prod["id"], name, brand)
+    return prod["id"]
+
+
+def product_out(p: sqlite3.Row) -> dict:
+    return {"id": p["id"], "barcode": p["barcode"], "name": p["name"], "brand": p["brand"],
+            "cat": p["cat"], "pkg": p["pkg"], "photo_v": p["photo_v"], "source": p["source"]}
+
+
+@app.get("/api/barcode/{code}")
+def barcode_lookup(code: str, conn=Depends(get_conn), user=Depends(current_user)):
+    norm = off.normalize(code)
+    if not norm:
+        raise HTTPException(422, "That does not look like a product barcode")
+    prod = conn.execute("SELECT * FROM products WHERE barcode = ?", (norm,)).fetchone()
+    if prod:
+        return {"found": True, "barcode": norm, "product": product_out(prod)}
+    try:
+        info = off.lookup(norm)
+    except off.Unavailable:
+        return {"found": False, "offline": True, "barcode": norm}
+    if not info:
+        return {"found": False, "barcode": norm}
+    cur = conn.execute(
+        "INSERT INTO products (barcode, name, brand, cat, pkg, source) VALUES (?,?,?,?,?,'openfoodfacts')",
+        (norm, info["name"], info["brand"], info["cat"], info["pkg"]))
+    pid = cur.lastrowid
+    img = off.fetch_image(info["image_url"]) if info["image_url"] else None
+    if img:
+        conn.execute("UPDATE products SET photo=?, photo_type=?, photo_v=1 WHERE id=?", (img[0], img[1], pid))
+    return {"found": True, "barcode": norm, "product": product_out(
+        conn.execute("SELECT * FROM products WHERE id = ?", (pid,)).fetchone())}
+
+
+def decode_photo(data_url: str) -> bytes:
+    prefix = "data:image/jpeg;base64,"
+    if not data_url.startswith(prefix):
+        raise HTTPException(422, "Photo must be a JPEG")
+    try:
+        raw = base64.b64decode(data_url[len(prefix):], validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(422, "Photo could not be read")
+    if not raw.startswith(b"\xff\xd8\xff"):
+        raise HTTPException(422, "Photo must be a JPEG")
+    if len(raw) > 400_000:
+        raise HTTPException(413, "Photo is too large")
+    return raw
+
+
+@app.post("/api/items/{item_id}/photo")
+def item_photo(item_id: int, body: PhotoIn, conn=Depends(get_conn), user=Depends(current_user)):
+    """Attach a photo to what an item is, so every purchase of it shows the same picture."""
+    raw = decode_photo(body.image)
+    item = get_item(conn, item_id)
+    pid = item["product_id"]
+    if not pid:
+        match = conn.execute(
+            "SELECT id FROM products WHERE name = ? COLLATE NOCASE AND brand = ? COLLATE NOCASE LIMIT 1",
+            (item["name"], item["brand"])).fetchone()
+        if match:
+            pid = match["id"]
+        else:
+            pid = conn.execute("INSERT INTO products (name, brand, cat, pkg) VALUES (?,?,?,?)",
+                               (item["name"], item["brand"], item["cat"], item["pkg"])).lastrowid
+        link_existing_items(conn, pid, item["name"], item["brand"])
+        conn.execute("UPDATE items SET product_id = ? WHERE id = ?", (pid, item_id))
+    conn.execute("UPDATE products SET photo=?, photo_type='image/jpeg', photo_v=COALESCE(photo_v,0)+1 WHERE id=?", (raw, pid))
+    log_event(conn, item, user, "Photo", "Added a product photo")
+    v = conn.execute("SELECT photo_v FROM products WHERE id = ?", (pid,)).fetchone()["photo_v"]
+    return {"product_id": pid, "photo_v": v}
+
+
+@app.get("/api/products/{pid}/photo")
+def product_photo(pid: int, conn=Depends(get_conn), user=Depends(current_user)):
+    row = conn.execute("SELECT photo, photo_type FROM products WHERE id = ?", (pid,)).fetchone()
+    if not row or not row["photo"]:
+        raise HTTPException(404, "No photo")
+    # The URL carries ?v=<photo_v>, so a new photo gets a new URL and old ones can be cached for good.
+    return Response(row["photo"], media_type=row["photo_type"] or "image/jpeg",
+                    headers={"Cache-Control": "private, max-age=31536000, immutable"})
+
+
 @app.get("/api/recent")
 def recent(conn=Depends(get_conn), user=Depends(current_user)):
     """Distinct products you have bought, newest first, for the Buy again chips."""
     rows = conn.execute(
-        """SELECT name, brand, cat, pkg, mode, MAX(id) AS last_id FROM items
+        """SELECT name, brand, cat, pkg, mode, product_id, MAX(id) AS last_id FROM items
            GROUP BY name, brand ORDER BY last_id DESC LIMIT 8"""
     ).fetchall()
     return [dict(r) for r in rows]

@@ -17,11 +17,16 @@ consumption and waste trends are possible later.
 - A shared shopping list tagged by store (Publix, Target, Walmart, BJ's, Whole Foods, Trader Joe's, or any
   store), with an optional note such as "BOGO". Pick a store to see only what to buy there. Stores are
   listed in `app/rules.py`
+- **Barcode scanning:** scan, check the filled-in card, save, and the camera is ready for the next one.
+  It tells you what you already have of that product. Unknown barcodes are learned the first time you
+  type them in, so they are instant after that
+- **Photos:** product photos come with the barcode lookup, or take one yourself. One photo is shared by
+  every purchase of the same product. Photos are stored in the database, so backups include them
 - Expiring view and a Locations view
 - Two logins (a password, or just tap your name), installable to the iPhone home screen
 - Full audit history per item (shown in the item screen)
 
-Planned next: barcode and photo capture, receipt scanning, daily expiry alerts, leftovers and
+Planned next: receipt scanning, daily expiry alerts, leftovers and
 recipe ideas.
 
 ## Run it locally
@@ -70,6 +75,16 @@ exposing grocery lists and not anything sensitive. Keep it that way by:
 
 To remove a password and go back to tap-your-name: `manage.py set-password ken --no-password`.
 
+### Barcode scanning needs https and internet
+
+- **Live camera scanning only works over https.** Over plain `http://192.168.x.x:8000` the Scan screen
+  switches to "take a photo of the barcode", which uses your phone's camera app and still works.
+  Set up Tailscale below to get https and live scanning.
+- **The VM needs internet access** to look up new barcodes. Check from the VM with:
+  `sudo -u groceries env GROCERIES_DB=/var/lib/groceries/groceries.db /opt/home-groceries/.venv/bin/python /opt/home-groceries/manage.py lookup 0021000614509`
+  It prints the product name if the lookup works, or says what is wrong.
+- A product only needs to be looked up once. After that it comes from your own catalog.
+
 ### Reaching it away from home (Tailscale)
 
 Install Tailscale on the VM and on both phones, then on the VM:
@@ -102,13 +117,21 @@ service and replace `/var/lib/groceries/groceries.db` with a backup file.
 ```
 app/main.py        API (FastAPI): login, items, actions, audit events, shopping list
 app/rules.py       Locations, categories and shelf-life rules (served to the web app)
+app/off.py         Open Food Facts barcode lookups and category guessing
 app/db.py          SQLite schema and password hashing
 app/static/        The phone web app (index.html, app.js, manifest, icons)
+app/static/vendor/ ZXing barcode reader (Apache-2.0, license included)
 manage.py          Admin commands: add-user, set-password, backup, seed-demo
 deploy/            systemd unit, setup and update scripts
 tests/             API tests
 prototype/         The original clickable prototype (sample data only)
 ```
+
+## Credits
+
+Product names, categories and photos from barcode lookups come from
+[Open Food Facts](https://world.openfoodfacts.org) (data under ODbL, images under CC BY-SA).
+Barcodes are read with [ZXing](https://github.com/zxing-js/library).
 
 ## Notes
 

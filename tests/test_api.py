@@ -249,3 +249,157 @@ def test_no_password_users_sign_in_by_name(client):
     client.cookies.clear()
     assert client.post("/api/login", json={"username": "kap", "password": ""}).status_code == 401
     assert client.post("/api/login", json={"username": "nobody"}).status_code == 401
+
+
+# ------------------------------------------------------------------ barcodes and photos
+import base64  # noqa: E402
+
+from app import off  # noqa: E402
+
+# A tiny valid-looking JPEG (starts with the JPEG signature); the server only checks the signature and size.
+JPEG = "data:image/jpeg;base64," + base64.b64encode(b"\xff\xd8\xff\xe0" + b"0" * 200).decode()
+FAKE_PRODUCTS = {
+    "0021000614505": {"name": "Cream Cheese Brick", "brand": "Philadelphia", "pkg": "8 oz (226 g)",
+                      "cat": "Dairy", "image_url": "https://images.example/cc.jpg"},
+    "0041331021025": {"name": "Black Beans", "brand": "Goya", "pkg": "15.5 oz", "cat": None, "image_url": ""},
+    "0049000028911": {"name": "Ginger Ale", "brand": "Canada Dry", "pkg": "12 pack", "cat": "Dry goods",
+                      "image_url": "https://images.example/ga.jpg"},
+}
+
+
+@pytest.fixture()
+def fake_off(monkeypatch):
+    calls = []
+
+    def lookup(code):
+        calls.append(code)
+        return FAKE_PRODUCTS.get(code)
+
+    monkeypatch.setattr(off, "lookup", lookup)
+    monkeypatch.setattr(off, "fetch_image", lambda url: (b"\xff\xd8\xff" + b"x" * 50, "image/jpeg") if url else None)
+    return calls
+
+
+def test_normalize():
+    assert off.normalize("021000614505") == "0021000614505"        # UPC-A padded to EAN-13
+    assert off.normalize("0 21000 61450 5") == "0021000614505"      # spaces ignored
+    assert off.normalize("00021000614505") == "0021000614505"       # GTIN-14 trimmed
+    assert off.normalize("12345670") == "12345670"                  # EAN-8
+    assert off.normalize("123") is None and off.normalize("abc") is None
+
+
+def test_guess_category():
+    g = off.guess_category
+    assert g(["en:dairies", "en:cheeses", "en:cream-cheeses"]) == "Dairy"
+    assert g(["en:canned-foods", "en:canned-vegetables", "en:legumes"]) == "Canned goods"
+    assert g(["en:frozen-foods", "en:pizzas"]) == "Frozen meals"
+    assert g(["en:frozen-desserts", "en:ice-creams"]) == "Frozen meals"   # not Dairy
+    assert g(["en:spreads", "en:peanut-butters"]) == "Dry goods"          # not Dairy
+    assert g(["en:meats", "en:poultries", "en:chicken"]) == "Meat & Seafood"
+    assert g(["en:cold-cuts", "en:meats"]) == "Deli"
+    assert g(["en:breads"]) == "Bakery"
+    assert g(["en:something-unusual"]) is None and g(None) is None
+
+
+def test_barcode_lookup_caches_product_and_photo(client, fake_off):
+    login(client)
+    r = client.get("/api/barcode/021000614505").json()
+    assert r["found"] and r["product"]["name"] == "Cream Cheese Brick" and r["product"]["cat"] == "Dairy"
+    assert r["product"]["photo_v"] == 1 and r["barcode"] == "0021000614505"
+    again = client.get("/api/barcode/0021000614505").json()
+    assert again["product"]["id"] == r["product"]["id"]
+    assert fake_off == ["0021000614505"]  # second time came from our own catalog, no network call
+    assert client.get(f"/api/products/{r['product']['id']}/photo").content.startswith(b"\xff\xd8\xff")
+
+
+def test_barcode_not_found_and_offline(client, fake_off, monkeypatch):
+    login(client)
+    assert client.get("/api/barcode/0000000000017").json() == {"found": False, "barcode": "0000000000017"}
+    assert client.get("/api/barcode/banana").status_code == 422
+
+    def down(code):
+        raise off.Unavailable("no route")
+
+    monkeypatch.setattr(off, "lookup", down)
+    r = client.get("/api/barcode/0000000000024").json()
+    assert r == {"found": False, "offline": True, "barcode": "0000000000024"}
+
+
+def test_scan_to_item_links_product_and_remembers_corrections(client, fake_off):
+    login(client)
+    p = client.get("/api/barcode/0041331021025").json()["product"]
+    assert p["cat"] is None  # unknown category: the app asks instead of guessing
+    it = new_item(client, name="Black Beans", brand="Goya", cat="Canned goods", loc="Pantry", pkg="15.5 oz can",
+                  product_id=p["id"], barcode="0041331021025")
+    assert it["product_id"] == p["id"] and it["photo_v"] is None
+    assert client.get("/api/barcode/0041331021025").json()["product"]["cat"] == "Canned goods"  # remembered
+
+
+def test_unknown_barcode_is_learned_on_save(client, fake_off):
+    login(client)
+    it = new_item(client, name="Mystery Sauce", brand="Store", cat="Canned goods", loc="Pantry", barcode="0000000000031")
+    assert it["product_id"]
+    again = client.get("/api/barcode/0000000000031").json()
+    assert again["found"] and again["product"]["name"] == "Mystery Sauce" and again["product"]["id"] == it["product_id"]
+
+
+def test_photo_upload_links_every_purchase_of_the_same_thing(client):
+    login(client)
+    a = new_item(client, name="Shredded Mozzarella", brand="Kraft", cat="Dairy")
+    b = new_item(client, name="shredded mozzarella", brand="kraft", cat="Dairy")
+    assert a["product_id"] is None
+    r = client.post(f"/api/items/{a['id']}/photo", json={"image": JPEG})
+    assert r.status_code == 200 and r.json()["photo_v"] == 1
+    items = {i["id"]: i for i in client.get("/api/items").json()}
+    assert items[a["id"]]["photo_v"] == 1 and items[b["id"]]["photo_v"] == 1  # the other purchase shares it
+    assert client.get(f"/api/products/{r.json()['product_id']}/photo").status_code == 200
+    # a later purchase of the same thing picks the photo up automatically
+    c = new_item(client, name="Shredded Mozzarella", brand="Kraft", cat="Dairy")
+    assert c["product_id"] == r.json()["product_id"]
+    assert client.post(f"/api/items/{a['id']}/photo", json={"image": JPEG}).json()["photo_v"] == 2
+    assert client.get(f"/api/items/{a['id']}/events").json()[0]["action"] == "Photo"
+
+
+def test_photo_validation(client):
+    login(client)
+    it = new_item(client, name="Photo test")
+    bad_type = "data:image/png;base64," + base64.b64encode(b"\x89PNG").decode()
+    not_jpeg = "data:image/jpeg;base64," + base64.b64encode(b"hello world").decode()
+    huge = "data:image/jpeg;base64," + base64.b64encode(b"\xff\xd8\xff" + b"0" * 450_000).decode()
+    for body in (bad_type, not_jpeg, "data:image/jpeg;base64,@@@"):
+        assert client.post(f"/api/items/{it['id']}/photo", json={"image": body}).status_code == 422
+    assert client.post(f"/api/items/{it['id']}/photo", json={"image": huge}).status_code in (413, 422)
+    client.cookies.clear()
+    assert client.post(f"/api/items/{it['id']}/photo", json={"image": JPEG}).status_code == 401
+    assert client.get("/api/products/1/photo").status_code == 401
+
+
+def test_database_upgrade_adds_product_column():
+    import sqlite3
+    path = os.path.join(_tmp, "old2.db")
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, brand TEXT NOT NULL DEFAULT '', "
+                 "cat TEXT NOT NULL, loc TEXT NOT NULL, mode TEXT NOT NULL, qty INTEGER NOT NULL DEFAULT 1, "
+                 "level TEXT NOT NULL DEFAULT 'full', pkg TEXT NOT NULL DEFAULT '', bought TEXT NOT NULL, exp TEXT NOT NULL, "
+                 "opened TEXT, ol INTEGER NOT NULL DEFAULT 0, type TEXT NOT NULL, col TEXT NOT NULL, created_by TEXT NOT NULL, "
+                 "created_at TEXT NOT NULL DEFAULT (datetime('now')), removed_at TEXT, removed_reason TEXT)")
+    conn.execute("INSERT INTO items (name,cat,loc,mode,bought,exp,type,col,created_by) VALUES ('Old','Dairy','Fridge','count','2026-01-01','2026-01-10','carton','#fff','kap')")
+    conn.commit(); conn.close()
+    old = db.DB_PATH
+    db.DB_PATH = type(old)(path)
+    try:
+        db.init()
+        row = db.connect().execute("SELECT name, product_id FROM items").fetchone()
+        assert row["name"] == "Old" and row["product_id"] is None
+    finally:
+        db.DB_PATH = old
+
+
+def test_scanning_gives_existing_rows_the_product_photo(client, fake_off):
+    login(client)
+    old = new_item(client, name="Ginger Ale", brand="Canada Dry", cat="Dry goods", loc="Pantry")  # bought before scanning
+    assert old["product_id"] is None
+    p = client.get("/api/barcode/0049000028911").json()["product"]
+    new_item(client, name="Ginger Ale", brand="Canada Dry", cat="Dry goods", loc="Pantry", product_id=p["id"], barcode="0049000028911")
+    rows = {i["id"]: i for i in client.get("/api/items").json()}
+    assert rows[old["id"]]["product_id"] == p["id"] and rows[old["id"]]["photo_v"] == 1

@@ -21,6 +21,20 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   expires_at TEXT NOT NULL
 );
+-- What a thing is, independent of any one purchase: remembers barcode, category and photo.
+CREATE TABLE IF NOT EXISTS products (
+  id INTEGER PRIMARY KEY,
+  barcode TEXT UNIQUE,
+  name TEXT NOT NULL,
+  brand TEXT NOT NULL DEFAULT '',
+  cat TEXT,
+  pkg TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'user',   -- 'user' or 'openfoodfacts'
+  photo BLOB,
+  photo_type TEXT,
+  photo_v INTEGER,                        -- NULL means no photo; bumps on every change
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS items (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -40,7 +54,8 @@ CREATE TABLE IF NOT EXISTS items (
   created_by TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   removed_at TEXT,
-  removed_reason TEXT
+  removed_reason TEXT,
+  product_id INTEGER REFERENCES products(id)
 );
 CREATE INDEX IF NOT EXISTS items_active ON items(removed_at);
 -- Append-only audit log: one row per thing that happened to an item.
@@ -88,6 +103,10 @@ def init() -> None:
             conn.execute("ALTER TABLE shopping ADD COLUMN store TEXT NOT NULL DEFAULT ''")
         if "note" not in cols:
             conn.execute("ALTER TABLE shopping ADD COLUMN note TEXT NOT NULL DEFAULT ''")
+        item_cols = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
+        if "product_id" not in item_cols:
+            conn.execute("ALTER TABLE items ADD COLUMN product_id INTEGER REFERENCES products(id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS items_product ON items(product_id)")
         conn.commit()
     finally:
         conn.close()
