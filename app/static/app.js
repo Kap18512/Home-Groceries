@@ -18,7 +18,7 @@ const $=s=>document.querySelector(s);
 let CFG=null, USER=null, items=[], shopping=[];
 const LEVELS={full:'Full',half:'Half',low:'Almost out'};
 const locKey=l=>l==='Pantry'?'pantry':l==='Fridge'?'fridge':'freezer';
-const S={tab:'search',q:'',loc:'all',cat:'all',status:'all',sort:'soon'};
+const S={tab:'search',q:'',loc:'all',cat:'all',status:'all',sort:'soon',store:'all'};
 
 async function api(method,url,body){
   const r=await fetch(url,{method,credentials:'same-origin',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});
@@ -61,6 +61,9 @@ function thumb(type,c){
   return `<svg viewBox="0 0 40 40" aria-hidden="true">${S[type]||S.box}</svg>`;
 }
 
+const photoUrl=(pid,v)=>`/api/products/${pid}/photo?v=${v}`;
+const thumbFor=i=>i.photo_v?`<img src="${photoUrl(i.product_id,i.photo_v)}" alt="" loading="lazy">`:thumb(i.type,i.col);
+
 /* ---------- helpers ---------- */
 const useBy=i=>i.opened&&i.ol?new Date(Math.min(i.exp,addD(i.opened,i.ol))):i.exp;
 function status(date){
@@ -88,7 +91,7 @@ function qtyBadge(i){
 function row(i,q){
   const st=status(useBy(i));
   return `<button class="row" data-act="open" data-id="${i.id}">
-    <span class="thumb">${thumb(i.type,i.col)}</span>
+    <span class="thumb">${thumbFor(i)}</span>
     <span class="rmain"><span class="rname">${hl(i.name,q||'')}</span>
       <span class="rsub">${i.brand?hl(i.brand,q||'')+' · ':''}${esc(i.pkg||'')}</span>
       <span class="rtags"><span class="tag">${esc(i.loc)}</span>${i.opened?`<span class="tag open">Opened ${ago(i.opened)}</span>`:''}</span></span>
@@ -173,16 +176,68 @@ function renderLocs(){
     <h2 class="sec">By category</h2>
     <div class="chips" style="flex-wrap:wrap;overflow:visible">${CFG.cats.map(c=>{const n=items.filter(i=>i.cat===c).length;return n?`<button class="chip" data-act="gocat" data-v="${esc(c)}">${c} · ${n}</button>`:''}).join('')}</div>`;
 }
+const ANY='Any store';
+function shopRow(s){
+  const have=items.filter(i=>i.name.toLowerCase().includes(s.name.toLowerCase()));
+  const sub=[s.note?esc(s.note):'',have.length?'<span style="color:var(--warn);font-weight:600">You already have '+esc(have[0].name)+' ('+esc(have[0].loc)+')</span>':''].filter(Boolean).join(' · ');
+  return `<div class="row" style="grid-template-columns:minmax(0,1fr) auto"><span class="rmain"><span class="rname">${esc(s.name)}</span>
+    ${sub?`<span class="rsub">${sub}</span>`:''}
+    <span class="rtags"><button class="tag storetag" data-act="shop-edit" data-id="${s.id}" aria-label="Edit ${esc(s.name)}, store: ${esc(s.store||ANY)}">${esc(s.store||ANY)}</button></span></span>
+    <button class="chip" data-act="list-del" data-id="${s.id}">Got it</button></div>`;
+}
 function renderList(){
+  const stores=CFG.stores;
+  const count=st=>shopping.filter(x=>x.store===st).length;
+  const chip=(v,label)=>`<button class="chip" data-act="shop-filter" data-v="${esc(v)}" aria-pressed="${S.store===v}">${esc(label)}</button>`;
+  const active=stores.filter(st=>count(st)>0||S.store===st);
+  let body='';
+  if(!shopping.length){
+    body='<div class="empty"><h3>List is empty</h3><p>Add what you need and pick the store. Items you use up can be added here too.</p></div>';
+  }else if(S.store==='all'){
+    const groups=[...stores.filter(st=>count(st)),...(count('')?['']:[])];
+    body=groups.map(st=>`<h2 class="sec">${esc(st||ANY)}<span>${count(st)}</span></h2><div class="list">${shopping.filter(x=>x.store===st).map(shopRow).join('')}</div>`).join('');
+  }else{
+    const mine=shopping.filter(x=>x.store===S.store),any=shopping.filter(x=>x.store==='');
+    body=(mine.length?`<h2 class="sec">${esc(S.store)}<span>${mine.length}</span></h2><div class="list">${mine.map(shopRow).join('')}</div>`
+      :`<div class="empty"><h3>Nothing for ${esc(S.store)}</h3><p>Pick that store when you add an item.</p></div>`)
+      +(any.length?`<h2 class="sec">${ANY}<span>${any.length}</span></h2><div class="list">${any.map(shopRow).join('')}</div>`:'');
+  }
+  const addStore=S.store==='all'?'':S.store;
   $('#view').innerHTML=`<h2 class="sec" style="margin-top:6px">Shopping list<span>${plural(shopping.length,'item')}</span></h2>
-    <form id="lform" style="display:flex;gap:8px"><input id="litem" class="inp" style="margin:0" placeholder="Add an item" autocomplete="off" maxlength="120"><button class="btn primary" type="submit">Add</button></form>
-    <div class="list" style="margin-top:12px">${shopping.length?shopping.map(s=>{
-      const have=items.filter(i=>i.name.toLowerCase().includes(s.name.toLowerCase()));
-      return `<div class="row" style="grid-template-columns:minmax(0,1fr) auto"><span class="rmain"><span class="rname">${esc(s.name)}</span>
-        <span class="rsub">${have.length?'<span style="color:var(--warn);font-weight:600">You already have '+esc(have[0].name)+' ('+esc(have[0].loc)+')</span>':'None on hand'}</span></span>
-        <button class="chip" data-act="list-del" data-id="${s.id}">Got it</button></div>`}).join(''):'<div class="empty"><h3>List is empty</h3><p>Items you use up can be added here with one tap.</p></div>'}</div>`;
+    <form id="lform" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px">
+      <input id="litem" class="inp" style="margin:0" placeholder="Add an item" autocomplete="off" maxlength="120" aria-label="Item to add">
+      <button class="btn primary" type="submit">Add</button>
+      <select id="lstore" class="inp" style="margin:0;grid-column:1/-1" aria-label="Store">
+        <option value="">${ANY}</option>${stores.map(st=>`<option ${st===addStore?'selected':''}>${esc(st)}</option>`).join('')}</select>
+    </form>
+    <div class="chips" style="margin-top:6px">${chip('all','All stores · '+shopping.length)}${active.map(st=>chip(st,st+' · '+count(st))).join('')}</div>
+    <div style="margin-top:6px">${body}</div>`;
   $('#lform').onsubmit=async e=>{e.preventDefault();const v=$('#litem').value.trim();if(!v)return;
-    try{await api('POST','/api/shopping',{name:v});await loadShopping();renderList();badge()}catch(x){fail(x)}};
+    try{await api('POST','/api/shopping',{name:v,store:$('#lstore').value});await loadShopping();renderList();badge()}catch(x){fail(x)}};
+}
+let SE=null;
+function shopEdit(id){
+  const x=shopping.find(i=>i.id===id);if(!x)return;
+  SE={id,name:x.name,store:x.store,note:x.note};
+  const stores=['',...CFG.stores];
+  sheet(`<h3 style="font:700 21px var(--display);margin:0">Shopping item</h3>
+    <label class="f">Name<input id="sh-name" maxlength="120" autocomplete="off" value="${esc(SE.name)}"></label>
+    <div class="chiplabel">Buy at</div>
+    <div class="locpick">${stores.map(st=>`<button class="chip" data-act="shop-store" data-v="${esc(st)}" aria-pressed="${SE.store===st}">${esc(st||ANY)}</button>`).join('')}</div>
+    <label class="f">Note (optional)<input id="sh-note" maxlength="80" autocomplete="off" placeholder="e.g. BOGO this week" value="${esc(SE.note)}"></label>
+    <p class="err" id="sherr" role="alert" style="color:var(--bad);margin:10px 2px 0;min-height:18px"></p>
+    <div class="btns" style="margin-top:8px"><button class="btn" data-act="close">Cancel</button><button class="btn primary" data-act="shop-save">Save</button></div>
+    <button class="btn block" data-act="list-del-sheet" style="margin-top:8px">Got it, remove from list</button>`);
+}
+async function removeShop(id){
+  const x=shopping.find(i=>i.id===id);if(!x)return;
+  try{
+    await api('DELETE','/api/shopping/'+id);await loadShopping();
+    if(S.tab==='list')renderList();badge();
+    toast('Removed '+x.name,'Undo',async()=>{
+      try{await api('POST','/api/shopping',{name:x.name,store:x.store,note:x.note});await loadShopping();if(S.tab==='list')renderList();badge()}catch(e){fail(e)}
+    });
+  }catch(e){fail(e)}
 }
 function badge(){const b=$('#listBadge');b.hidden=!shopping.length;b.textContent=shopping.length}
 function render(){
@@ -192,7 +247,7 @@ function render(){
 
 /* ---------- sheet ---------- */
 function sheet(html){$('#sheetbody').innerHTML=html;$('#sheet').hidden=false;$('.panel').scrollTop=0}
-function closeSheet(){$('#sheet').hidden=true;$('#sheetbody').innerHTML='';M=null;render()}
+function closeSheet(){stopScan();B=null;$('#sheet').hidden=true;$('#sheetbody').innerHTML='';M=null;SE=null;render()}
 const sheetOpen=()=>!$('#sheet').hidden;
 
 function openItem(id){
@@ -200,7 +255,7 @@ function openItem(id){
   const ub=useBy(i),st=status(ub);
   const earlier=i.opened&&i.ol&&ub<i.exp;
   sheet(`
-    <div class="shead"><span class="thumb">${thumb(i.type,i.col)}</span><div><h3>${esc(i.name)}</h3><p>${[i.brand,i.pkg,i.cat].filter(Boolean).map(esc).join(' · ')}</p></div></div>
+    <div class="shead"><span class="thumb">${thumbFor(i)}</span><div><h3>${esc(i.name)}</h3><p>${[i.brand,i.pkg,i.cat].filter(Boolean).map(esc).join(' · ')}</p></div></div>
     <div class="dates">
       <div><small>Purchased</small><b>${fmtD(i.bought)}</b></div>
       <div><small>Package date</small><b>${fmtD(i.exp)}</b></div>
@@ -218,6 +273,8 @@ function openItem(id){
     <p class="note">Moving to a freezer resets the use-by date to the frozen shelf life. Moving back to the fridge starts a short thaw clock.</p>
     <div class="btns" style="margin-top:10px"><button class="btn" data-act="used" data-id="${i.id}">Used up</button><button class="btn danger" data-act="toss" data-id="${i.id}">Tossed</button></div>
     <div class="btns" style="margin-top:8px"><button class="btn" data-act="buyagain" data-id="${i.id}">Add to shopping list</button><button class="btn" data-act="edit" data-id="${i.id}">Edit details</button></div>
+    <button class="btn block" data-act="photo-pick" data-id="${i.id}" style="margin-top:8px">${i.photo_v?'Change photo':'Add a photo'}</button>
+    <input id="itemphoto" type="file" accept="image/*" data-id="${i.id}" hidden>
     <div class="chiplabel" style="margin-top:20px">History</div>
     <ul class="hist" id="hist"><li><span>Loading…</span></li></ul>`);
   api('GET',`/api/items/${id}/events`).then(ev=>{
@@ -246,9 +303,10 @@ let M=null;
 function addMenu(){
   sheet(`<h3 style="font:700 21px var(--display);margin:0 0 4px">Add items</h3>
     <div class="menu">
+      <button class="mbtn" data-act="scan"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M4 7V5h3M17 5h3v2M20 17v2h-3M7 19H4v-2M8 9v6M12 9v6M16 9v6"/></svg></span><span><b>Scan barcodes</b><span>Scan, save, scan the next one</span></span></button>
       <button class="mbtn" data-act="manual"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg></span><span><b>Type it in</b><span>Name, dates, location</span></span></button>
     </div>
-    <p class="note">Barcode and receipt scanning are planned for the next phase.</p>
+    <p class="note">Receipt scanning is planned for a later phase.</p>
     <div class="chiplabel">Buy again</div>
     <div class="again" id="again" style="margin-top:8px"><span class="note">Loading…</span></div>`);
   api('GET','/api/recent').then(r=>{
@@ -259,7 +317,7 @@ function addMenu(){
 }
 function newM(p){
   p=p||{};const cat=p.cat||CFG.cats[0];
-  M={editId:null,name:p.name||'',brand:p.brand||'',cat,loc:p.loc||CFG.rules[cat].loc,mode:p.mode||'count',qty:1,level:'full',pkg:p.pkg||'',bought:T,exp:null,expEdited:false,opened:null};
+  M={editId:null,productId:p.productId||null,name:p.name||'',brand:p.brand||'',cat,loc:p.loc||CFG.rules[cat].loc,mode:p.mode||'count',qty:1,level:'full',pkg:p.pkg||'',bought:T,exp:null,expEdited:false,opened:null};
   M.exp=suggest(M.cat,M.loc,M.bought).date;
 }
 function manual(){
@@ -296,7 +354,7 @@ async function saveManual(){
   if(!M.name.trim()){err.textContent='Give the item a name.';$('#f-name').focus();return}
   if(!M.exp){err.textContent='Pick a package date.';return}
   const body={name:M.name.trim(),brand:M.brand.trim(),cat:M.cat,loc:M.loc,mode:M.mode,qty:M.qty,level:M.level,pkg:M.pkg.trim(),
-    bought:iso(M.bought),exp:iso(M.exp),opened:M.opened?iso(M.opened):null};
+    bought:iso(M.bought),exp:iso(M.exp),opened:M.opened?iso(M.opened):null,product_id:M.productId||null};
   const btn=$('#savebtn');btn.disabled=true;
   try{
     const editing=M.editId;
@@ -305,6 +363,145 @@ async function saveManual(){
     if(editing){M=null;openItem(editing);toast('Saved changes')}
     else{closeSheet();toast('Added '+body.name)}
   }catch(e){err.textContent=e.message;btn.disabled=false}
+}
+
+
+/* ---------- photos ---------- */
+/* Shrinks any picture to a 256px square JPEG (whole product visible on white) before upload. */
+async function fileToJpeg(file,size=256){
+  let bmp;
+  try{bmp=await createImageBitmap(file,{imageOrientation:'from-image'})}
+  catch(e){bmp=await new Promise((res,rej)=>{const im=new Image();im.onload=()=>res(im);im.onerror=rej;im.src=URL.createObjectURL(file)})}
+  const w=bmp.width||bmp.naturalWidth,h=bmp.height||bmp.naturalHeight,k=Math.min(size/w,size/h);
+  const c=document.createElement('canvas');c.width=c.height=size;const x=c.getContext('2d');
+  x.fillStyle='#fff';x.fillRect(0,0,size,size);
+  x.drawImage(bmp,(size-w*k)/2,(size-h*k)/2,w*k,h*k);
+  return c.toDataURL('image/jpeg',0.82);
+}
+async function uploadItemPhoto(id,file){
+  try{
+    const image=await fileToJpeg(file);
+    await api('POST',`/api/items/${id}/photo`,{image});
+    await loadItems();openItem(id);toast('Photo saved');
+  }catch(e){fail(e)}
+}
+
+/* ---------- barcode scanning ---------- */
+let B=null,SC=null,scanning=false,scanCount=0,lastCode='',lastCodeAt=0;
+const liveCameraOK=()=>window.isSecureContext&&!!navigator.mediaDevices?.getUserMedia&&!!window.ZXing;
+const scanHints=hard=>{
+  const h=new Map();
+  h.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.EAN_8,ZXing.BarcodeFormat.UPC_A,ZXing.BarcodeFormat.UPC_E]);
+  if(hard)h.set(ZXing.DecodeHintType.TRY_HARDER,true);
+  return h;
+};
+function setScanStatus(t){const e=$('#scanstatus');if(e)e.textContent=t}
+function openScan(){
+  B=null;scanCount=0;scanning=true;
+  const live=liveCameraOK();
+  const why=!window.isSecureContext?'Live scanning needs a secure (https) connection. Until that is set up, take a photo of the barcode instead.':'This browser cannot open the camera. Take a photo of the barcode instead.';
+  sheet(`<div class="rhead"><b>Scan barcodes</b><span class="note num" id="scount" style="margin:0">0 added</span></div>
+    ${live?`<div class="scanbox"><video id="scanvideo" playsinline muted></video></div>`:`<div class="card" style="margin-top:10px"><p class="note" style="margin:0 0 10px">${why}</p></div>`}
+    <button class="btn ${live?'':'primary'} block" id="photobtn" data-act="scan-photo" style="margin-top:10px" ${live?'hidden':''}>Take a photo of the barcode</button>
+    <p class="note" id="scanstatus" role="status">${live?'Starting the camera…':'Tap the button, take a clear photo of the barcode, and it will be read.'}</p>
+    <input id="scanfile" type="file" accept="image/*" capture="environment" hidden>
+    <input id="cardphoto" type="file" accept="image/*" hidden>
+    <form id="codeform" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:4px">
+      <input id="codein" class="inp" style="margin:0" inputmode="numeric" autocomplete="off" maxlength="20" placeholder="Or type the barcode number" aria-label="Barcode number">
+      <button class="btn" type="submit">Look up</button></form>
+    <div id="scancard"></div>
+    <button class="btn block" data-act="scan-done" style="margin-top:12px">Done</button>`);
+  $('#codeform').onsubmit=e=>{e.preventDefault();const v=$('#codein').value.replace(/\D/g,'');if(v.length<8)return setScanStatus('Barcodes have 8, 12 or 13 digits.');onCode(v);$('#codein').value=''};
+  if(live)startLive();
+}
+async function startLive(){
+  try{
+    const reader=new ZXing.BrowserMultiFormatReader(scanHints(false),250);
+    SC={reader};
+    await reader.decodeFromConstraints({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}},'scanvideo',(res)=>{if(res)onCode(res.getText())});
+    setScanStatus('Point the camera at a barcode.');
+  }catch(e){
+    SC=null;
+    setScanStatus(e&&e.name==='NotAllowedError'?'Camera access was blocked. Allow it in your browser settings, or use a photo instead.':'Could not start the camera. Use a photo instead.');
+    $('#photobtn')&&($('#photobtn').hidden=false);
+  }
+}
+function stopScan(){scanning=false;if(SC){try{SC.reader.reset()}catch(e){}SC=null}}
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){if(SC){try{SC.reader.reset()}catch(e){}SC=null}}
+  else if(scanning&&!SC&&liveCameraOK()&&$('#scanvideo'))startLive();
+});
+async function decodeFile(file){
+  setScanStatus('Reading the photo…');
+  try{
+    const big=await createImageBitmap(file,{imageOrientation:'from-image'});
+    const k=Math.min(1,1600/Math.max(big.width,big.height));
+    const c=document.createElement('canvas');c.width=Math.round(big.width*k);c.height=Math.round(big.height*k);
+    c.getContext('2d').drawImage(big,0,0,c.width,c.height);
+    const res=await new ZXing.BrowserMultiFormatReader(scanHints(true)).decodeFromImageUrl(c.toDataURL('image/jpeg',0.9));
+    onCode(res.getText());
+  }catch(e){setScanStatus('Could not read a barcode in that photo. Get closer, keep it flat and in focus, or type the number below.')}
+}
+async function onCode(code){
+  if(B)return;                                   // a card is open; finish or skip it first
+  const now=Date.now();
+  if(code===lastCode&&now-lastCodeAt<4000)return; // the camera sees the same barcode many times a second
+  lastCode=code;lastCodeAt=now;
+  navigator.vibrate&&navigator.vibrate(60);
+  setScanStatus('Looking up '+code+'…');
+  try{
+    const r=await api('GET','/api/barcode/'+encodeURIComponent(code));
+    const p=r.product||null;
+    B={code:r.barcode,found:r.found,offline:!!r.offline,product:p,name:p?p.name:'',brand:p?p.brand:'',pkg:p?p.pkg:'',
+       cat:p&&p.cat?p.cat:'',loc:'Fridge',locEdited:false,qty:1,exp:null,expEdited:false,photo:null};
+    if(B.cat){B.loc=CFG.rules[B.cat].loc;B.exp=suggest(B.cat,B.loc,T).date}
+    setScanStatus(r.found?'Found it.':'That barcode is new to us.');
+    renderCard();
+  }catch(e){setScanStatus(e.message)}
+}
+function renderCard(){
+  const c=$('#scancard');if(!c)return;
+  if(!B){c.innerHTML='';return}
+  const p=B.product;
+  const home=items.filter(i=>(p&&i.product_id===p.id)||(B.name&&i.name.toLowerCase()===B.name.toLowerCase()&&i.brand.toLowerCase()===B.brand.toLowerCase()));
+  const src=B.found?(p.source==='openfoodfacts'?'Product data and photo: Open Food Facts.':'From your own catalog.')
+    :(B.offline?'Could not reach the product database. Type it in once and this barcode is remembered.':'Not in the product database. Type it in once and this barcode is remembered.');
+  const img=B.photo?`<img src="${B.photo}" alt="">`:(p&&p.photo_v?`<img src="${photoUrl(p.id,p.photo_v)}" alt="">`:thumb(B.cat?CFG.rules[B.cat].type:'box',B.cat?CFG.rules[B.cat].col:'#7E8F86'));
+  c.innerHTML=`<div class="card found">
+    <div class="shead" style="margin-bottom:6px"><span class="thumb">${img}</span><div style="min-width:0"><p class="num" style="margin:0;font-size:12px">Barcode ${esc(B.code)}</p><p style="margin:2px 0 0;font-size:13px">${esc(src)}</p></div></div>
+    ${home.length?`<p class="note" style="color:var(--warn);font-weight:600;margin:4px 2px 8px">You already have: ${home.map(i=>(i.mode==='count'?'×'+i.qty:LEVELS[i.level])+' in '+esc(i.loc)+' (use by '+fmtD(useBy(i))+')').join('; ')}</p>`:''}
+    <label class="f">Name<input id="b-name" autocomplete="off" maxlength="120" value="${esc(B.name)}"></label>
+    <div class="two"><label class="f">Brand<input id="b-brand" autocomplete="off" maxlength="80" value="${esc(B.brand)}"></label>
+    <label class="f">Size<input id="b-pkg" autocomplete="off" maxlength="60" value="${esc(B.pkg)}"></label></div>
+    <div class="two"><label class="f">Category<select id="b-cat"><option value="" ${B.cat?'':'selected'}>Pick one</option>${CFG.cats.map(x=>`<option ${x===B.cat?'selected':''}>${x}</option>`).join('')}</select></label>
+    <label class="f">Location<select id="b-loc">${CFG.locs.map(x=>`<option ${x===B.loc?'selected':''}>${x}</option>`).join('')}</select></label></div>
+    <div class="qrow"><span>How many</span><div class="stepper"><button data-act="b-dec" aria-label="One less">−</button><output class="num">${B.qty}</output><button data-act="b-inc" aria-label="One more">+</button></div></div>
+    <label class="f">Package date<input id="b-exp" type="date" value="${B.exp?iso(B.exp):''}"></label>
+    <p class="note" id="b-note"></p>
+    <button class="btn block" data-act="card-photo" style="margin-top:6px">${B.photo||(p&&p.photo_v)?'Retake photo':'Add a photo'}</button>
+    <p class="err" id="b-err" role="alert" style="color:var(--bad);margin:8px 2px 0;min-height:18px"></p>
+    <div class="btns" style="margin-top:6px"><button class="btn" data-act="b-skip">Skip</button><button class="btn primary" id="b-save" data-act="b-save">Save and scan next</button></div></div>`;
+  updCard();
+}
+function updCard(){
+  if(!B||!$('#b-save'))return;
+  const s=B.cat?suggestNote(B.cat,B.loc,T):null;
+  if(!B.expEdited&&s&&s.ok){B.exp=s.date;$('#b-exp').value=iso(B.exp)}
+  $('#b-note').textContent=s?s.txt+(B.expEdited?' You set the date yourself.':''):'Pick a category to get a suggested date.';
+  $('#b-note').className='note'+(s&&s.ok?' good':'');
+  $('#b-save').disabled=!(B.name.trim()&&B.cat&&B.exp);
+}
+async function saveCard(){
+  const btn=$('#b-save');btn.disabled=true;
+  try{
+    const it=await api('POST','/api/items',{name:B.name.trim(),brand:B.brand.trim(),cat:B.cat,loc:B.loc,mode:'count',qty:B.qty,pkg:B.pkg.trim(),
+      bought:iso(T),exp:iso(B.exp),product_id:B.product?B.product.id:null,barcode:B.code});
+    if(B.photo){try{await api('POST',`/api/items/${it.id}/photo`,{image:B.photo})}catch(e){fail(e)}}
+    await loadItems();
+    scanCount++;$('#scount').textContent=scanCount+' added';
+    toast('Added '+it.name);
+    B=null;lastCodeAt=Date.now();renderCard();setScanStatus('Saved. Scan the next one.');  // cooldown: the camera is probably still on the same barcode
+  }catch(e){$('#b-err').textContent=e.message;btn.disabled=false}
 }
 
 /* ---------- login ---------- */
@@ -355,11 +552,20 @@ const H={
   used:b=>removeItem(byId(b),'used'),
   toss:b=>removeItem(byId(b),'tossed'),
   buyagain:async b=>{const it=items.find(x=>x.id===byId(b));await addShop(it.name)()},
-  'list-del':async b=>{try{await api('DELETE','/api/shopping/'+byId(b));await loadShopping();renderList();badge()}catch(e){fail(e)}},
+  'list-del':b=>removeShop(byId(b)),
+  'list-del-sheet':async()=>{const id=SE.id;closeSheet();await removeShop(id)},
+  'shop-filter':b=>{S.store=b.dataset.v;renderList()},
+  'shop-edit':b=>shopEdit(byId(b)),
+  'shop-store':b=>{SE.store=b.dataset.v;document.querySelectorAll('[data-act=shop-store]').forEach(x=>x.setAttribute('aria-pressed',x===b))},
+  'shop-save':async()=>{
+    if(!SE.name.trim()){$('#sherr').textContent='Give the item a name.';return}
+    try{await api('PATCH','/api/shopping/'+SE.id,{name:SE.name.trim(),store:SE.store,note:SE.note.trim()});await loadShopping();closeSheet()}
+    catch(e){$('#sherr').textContent=e.message}
+  },
   'list-add-q':async()=>{const v=S.q.trim();if(v)await addShop(v)()},
   add:addMenu,
   manual:()=>{newM();manual()},
-  again:b=>{const p=window._recent[+b.dataset.k];newM({name:p.name,brand:p.brand,cat:p.cat,pkg:p.pkg,mode:p.mode});manual()},
+  again:b=>{const p=window._recent[+b.dataset.k];newM({name:p.name,brand:p.brand,cat:p.cat,pkg:p.pkg,mode:p.mode,productId:p.product_id});manual()},
   edit:b=>{const i=items.find(x=>x.id===byId(b));
     M={editId:i.id,name:i.name,brand:i.brand,cat:i.cat,loc:i.loc,mode:i.mode,qty:i.qty,level:i.level,pkg:i.pkg,bought:i.bought,exp:i.exp,expEdited:true,opened:i.opened};manual()},
   mode:b=>{M.mode=b.dataset.v;manual()},
@@ -369,22 +575,48 @@ const H={
   'save-manual':saveManual,
   logout:async()=>{try{await api('POST','/api/logout')}catch(e){}items=[];shopping=[];$('#view').innerHTML='';showLogin()},
   retry:boot,
+  scan:openScan,'scan-done':closeSheet,
+  'scan-photo':()=>$('#scanfile').click(),
+  'b-skip':()=>{B=null;lastCodeAt=Date.now();renderCard();setScanStatus('Skipped. Scan the next one.')},
+  'b-inc':()=>{B.qty=Math.min(999,B.qty+1);renderCard()},
+  'b-dec':()=>{B.qty=Math.max(1,B.qty-1);renderCard()},
+  'b-save':saveCard,
+  'card-photo':()=>$('#cardphoto').click(),
+  'photo-pick':()=>$('#itemphoto').click(),
   'quick-login':async b=>{
     try{await api('POST','/api/login',{username:b.dataset.u,password:''});boot()}
     catch(e){$('#qerr').textContent=e.message}
   },
   'show-pw':()=>{$('#quickwrap').hidden=true;$('#loginForm').hidden=false;$('#lu').focus()}
 };
-function addShop(name){return async()=>{
-  try{await api('POST','/api/shopping',{name});await loadShopping();badge();toast('“'+name+'” is on the shopping list');if(S.tab==='list')renderList()}catch(e){fail(e)}
+function addShop(name,store){return async()=>{
+  try{await api('POST','/api/shopping',{name,store:store||''});await loadShopping();badge();toast('“'+name+'” is on the shopping list');if(S.tab==='list')renderList()}catch(e){fail(e)}
 }}
 document.addEventListener('click',e=>{const b=e.target.closest('[data-act]');if(b&&H[b.dataset.act])H[b.dataset.act](b,e)});
 function onInput(e){
   const t=e.target,id=t.id;
+  if(t.type==='file'){
+    const f=t.files&&t.files[0];t.value='';
+    if(!f)return;
+    if(id==='itemphoto')uploadItemPhoto(+t.dataset.id,f);
+    else if(id==='scanfile')decodeFile(f);
+    else if(id==='cardphoto'&&B)fileToJpeg(f).then(d=>{B.photo=d;renderCard()}).catch(()=>setScanStatus('Could not use that photo.'));
+    return;
+  }
+  if(B&&id&&id.startsWith('b-')){
+    if(id==='b-name')B.name=t.value;
+    else if(id==='b-brand')B.brand=t.value;
+    else if(id==='b-pkg')B.pkg=t.value;
+    else if(id==='b-cat'){B.cat=t.value;if(B.cat&&!B.locEdited){B.loc=CFG.rules[B.cat].loc;$('#b-loc').value=B.loc}}
+    else if(id==='b-loc'){B.loc=t.value;B.locEdited=true}
+    else if(id==='b-exp'&&t.value){B.exp=parseISO(t.value);B.expEdited=true}
+    updCard();return;
+  }
   // Ignore the blur-time "change" for the search box: input already handled every keystroke, and
   // redrawing the results on blur would swallow the tap on a button inside them.
   if(id==='q'){if(e.type==='input'){S.q=t.value;renderResults()}return}
   if(id==='sort'){S.sort=t.value;renderResults();return}
+  if(SE){if(id==='sh-name')SE.name=t.value;else if(id==='sh-note')SE.note=t.value;return}
   if(!M)return;
   if(id==='f-name')M.name=t.value;
   else if(id==='f-brand')M.brand=t.value;

@@ -13,6 +13,7 @@ CATS = (
     "Bakery", "Canned goods", "Dry goods", "Leftovers",
 )
 LEVELS = ("full", "half", "low")
+STORES = ("Publix", "Target", "Walmart", "BJ's Wholesale", "Whole Foods", "Trader Joe's")
 
 RULES = {
     "Dairy":          {"fridge": 14,  "freezer": 90,  "pantry": 0,   "open": 7,  "loc": "Fridge",          "type": "carton", "col": "#4F8FD6"},

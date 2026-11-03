@@ -7,6 +7,7 @@
   python manage.py list-users
   python manage.py backup /var/backups/groceries   # consistent copy of the database
   python manage.py seed-demo                   # sample items, only into an empty inventory
+  python manage.py lookup 0021000614505        # check this machine can reach Open Food Facts
 """
 import argparse
 import getpass
@@ -79,6 +80,22 @@ def cmd_backup(args):
     print(f"Wrote {target} (kept the newest {args.keep}).")
 
 
+def cmd_lookup(args):
+    from app import off
+    code = off.normalize(args.barcode)
+    if not code:
+        sys.exit("That is not a barcode (expected 8, 12 or 13 digits).")
+    try:
+        info = off.lookup(code)
+    except off.Unavailable as e:
+        sys.exit(f"Could not reach Open Food Facts: {e}\nCheck that this machine has internet access.")
+    if not info:
+        sys.exit(f"Reached Open Food Facts, but {code} is not in its database.")
+    print(f"Found: {info['name']} | brand {info['brand'] or '-'} | size {info['pkg'] or '-'} | category guess {info['cat'] or 'none'}")
+    img = off.fetch_image(info["image_url"]) if info["image_url"] else None
+    print(f"Photo: {len(img[0])} bytes" if img else "Photo: none available")
+
+
 DEMO = [
     # name, brand, cat, loc, mode, qty/level, pkg, bought days ago, exp days from today, opened days ago
     ("Cream cheese brick", "Philadelphia", "Dairy", "Fridge", "count", 1, "8 oz", 12, 9, 4),
@@ -125,6 +142,7 @@ def main():
     sub.add_parser("list-users").set_defaults(fn=cmd_list_users)
     b = sub.add_parser("backup"); b.add_argument("folder"); b.add_argument("--keep", type=int, default=30); b.set_defaults(fn=cmd_backup)
     sub.add_parser("seed-demo").set_defaults(fn=cmd_seed_demo)
+    lk = sub.add_parser("lookup"); lk.add_argument("barcode"); lk.set_defaults(fn=cmd_lookup)
     args = p.parse_args()
     args.fn(args)
 
